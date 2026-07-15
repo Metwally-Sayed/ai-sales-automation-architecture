@@ -1,0 +1,42 @@
+direction: right
+
+customer: Customer {
+  shape: person
+}
+
+sales: Sales team {
+  shape: person
+}
+
+owner: Business owner {
+  shape: person
+}
+
+channels: Customer channels {
+  whatsapp: WhatsApp
+  instagram: Instagram
+  facebook: Facebook
+}
+
+platform: AI Sales Automation Platform {
+  style.fill: "#EEF4FF"
+  style.stroke: "#2563EB"
+  style.stroke-width: 3
+
+  capture: Capture conversations
+  understand: Understand intent and lead data
+  organize: Organize leads and follow-ups
+  approve: Ask for approval when needed
+  reply: Send through the original channel
+}
+
+customer -> channels: sends message
+channels -> platform.capture: inbound conversation
+platform.capture -> platform.understand
+platform.understand -> platform.organize
+platform.organize -> platform.approve
+platform.approve -> platform.reply
+platform.organize -> sales: leads and tasks
+sales -> platform.approve: approve, edit, or reject
+platform.reply -> channels: approved reply
+platform.organize -> owner: daily sales summary
