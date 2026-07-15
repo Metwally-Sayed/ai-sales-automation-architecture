@@ -1,0 +1,33 @@
+direction: right
+
+event: New message or scheduled follow-up
+context: Context Builder\nOnly relevant tenant data
+hermes: Hermes Agent Runtime
+model: OpenAI model adapter
+validate: Validate structured output
+policy: Action Policy Engine
+
+safe: Low-risk internal action\nTag, summarize, create task
+review: Human approval\nReply, quotation, appointment
+blocked: Block and log\nUnsupported or unsafe action
+
+tools: Restricted Tool Gateway
+audit: Audit log
+outbox: Message outbox
+crm: CRM modules
+employee: Sales employee {
+  shape: person
+}
+
+event -> context -> hermes -> model -> validate -> policy
+policy -> safe: low risk
+policy -> review: customer-facing or medium/high risk
+policy -> blocked: forbidden
+safe -> tools
+review -> employee: request approval
+employee -> review: approve, edit, or reject
+review -> tools: approved
+blocked -> audit
+tools -> crm: controlled internal commands
+tools -> outbox: approved outbound command
+tools -> audit

@@ -1,0 +1,17 @@
+direction: right
+
+customer: 1. Customer sends message
+connector: 2. Connector receives it
+normalize: 3. Convert to NormalizedMessage
+check: 4. Check duplicate and idempotency
+save: 5. Save contact and conversation
+queue: 6. Queue processing job
+hermes: 7. Hermes reads approved context
+extract: 8. Classify and extract lead data
+update: 9. Update lead and create tasks
+draft: 10. Draft next reply or action
+approval: 11. Ask for approval when required
+outbox: 12. Put approved reply in outbox
+send: 13. Send through original channel
+
+customer -> connector -> normalize -> check -> save -> queue -> hermes -> extract -> update -> draft -> approval -> outbox -> send

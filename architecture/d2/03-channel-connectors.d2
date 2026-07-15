@@ -1,0 +1,37 @@
+direction: down
+
+core: Channel Gateway {
+  label: One contract for every channel
+  style.fill: "#EEF4FF"
+  style.stroke: "#2563EB"
+  style.stroke-width: 3
+}
+
+whatsapp: WhatsApp connector {
+  provider: WhatsAppProvider interface
+  openwa: OpenWA\nPrimary for MVP
+  wpp: WPPConnect\nFallback candidate
+  webjs: whatsapp-web.js\nSecond fallback
+  manual: Open conversation manually\nLast fallback
+
+  provider -> openwa: primary adapter
+  provider -> wpp: switch if OpenWA fails
+  provider -> webjs: switch if needed
+  provider -> manual: human takeover
+}
+
+meta: Meta browser connector {
+  browserbase: Browserbase\nHosts isolated browser sessions
+  playwright: Playwright\nRuns stable repeated steps
+  stagehand: Stagehand\nRecovers when selectors change
+  worker: Meta Browser Worker\nReads and sends messages
+  manual: Open Meta inbox manually\nLast fallback
+
+  browserbase -> worker: browser session
+  playwright -> worker: normal path
+  stagehand -> worker: recovery path
+  worker -> manual: human takeover when blocked
+}
+
+whatsapp.provider -> core: normalized events and commands
+meta.worker -> core: normalized events and commands
