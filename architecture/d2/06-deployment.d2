@@ -1,0 +1,49 @@
+direction: down
+
+users: Users {
+  employee: Sales employee
+  owner: Business owner
+}
+
+pilot: Pilot environment - Docker Compose {
+  api: NestJS API\nModular monolith
+  jobs: BullMQ workers
+  hermes: Hermes runtime
+  whatsapp: WhatsApp connector process
+  meta: Meta browser worker
+  postgres: PostgreSQL {
+    shape: cylinder
+  }
+  redis: Redis {
+    shape: cylinder
+  }
+  storage: MinIO {
+    shape: cylinder
+  }
+  observability: Logs and health checks
+}
+
+browserbase: Browserbase cloud {
+  sessions: Isolated browser context per tenant
+}
+
+platforms: External platforms {
+  wa: WhatsApp Web
+  meta: Meta Business Suite
+  openai: OpenAI models
+}
+
+users -> pilot.api
+pilot.api -> pilot.postgres
+pilot.api -> pilot.redis
+pilot.api -> pilot.storage
+pilot.jobs -> pilot.redis
+pilot.jobs -> pilot.hermes
+pilot.hermes -> platforms.openai
+pilot.whatsapp -> platforms.wa
+pilot.meta -> browserbase.sessions
+browserbase.sessions -> platforms.meta
+pilot.api -> pilot.observability
+pilot.jobs -> pilot.observability
+pilot.whatsapp -> pilot.observability
+pilot.meta -> pilot.observability
