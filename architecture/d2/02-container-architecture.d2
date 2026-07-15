@@ -1,0 +1,75 @@
+direction: right
+
+channels: Channels {
+  whatsapp: WhatsApp Web
+  meta: Meta Business Suite\nInstagram + Facebook
+}
+
+connectors: Connector processes {
+  whatsapp_connector: WhatsApp Connector\nOpenWA primary\nWPPConnect fallback
+  meta_worker: Meta Browser Worker\nBrowserbase + Playwright\nStagehand recovery
+}
+
+ingestion: Message entry {
+  gateway: Channel Gateway
+  normalizer: Normalize message format
+  dedup: Deduplicate and create idempotency key
+  queue: Redis + BullMQ
+}
+
+core: NestJS Modular Monolith {
+  auth: Tenant, users, roles
+  conversations: Conversations
+  contacts: Contacts
+  leads: Leads and pipeline
+  tasks: Tasks and follow-ups
+  approvals: Human approval queue
+  outbox: Outbound message outbox
+  reports: Reports
+  knowledge: Company knowledge and policies
+}
+
+ai: AI runtime {
+  hermes: Hermes Agent Runtime
+  context: Context Builder
+  models: OpenAI model adapter
+  policy: Action Policy
+  tools: Restricted Tool Gateway
+}
+
+data: Data stores {
+  postgres: PostgreSQL {
+    shape: cylinder
+  }
+  redis: Redis {
+    shape: cylinder
+  }
+  files: MinIO / S3-compatible storage {
+    shape: cylinder
+  }
+}
+
+channels.whatsapp -> connectors.whatsapp_connector
+channels.meta -> connectors.meta_worker
+connectors.whatsapp_connector -> ingestion.gateway
+connectors.meta_worker -> ingestion.gateway
+ingestion.gateway -> ingestion.normalizer -> ingestion.dedup -> ingestion.queue
+ingestion.queue -> core.conversations
+core.conversations -> core.contacts -> core.leads -> core.tasks
+ingestion.queue -> ai.hermes
+core.knowledge -> ai.context
+core.conversations -> ai.context
+core.leads -> ai.context
+ai.context -> ai.hermes -> ai.models
+ai.models -> ai.policy
+ai.policy -> ai.tools
+ai.policy -> core.approvals: risky action
+core.approvals -> ai.tools: approved
+ai.tools -> core.leads
+ai.tools -> core.tasks
+ai.tools -> core.outbox
+core.outbox -> connectors.whatsapp_connector
+core.outbox -> connectors.meta_worker
+core -> data.postgres
+ingestion.queue -> data.redis
+core.conversations -> data.files
