@@ -1,163 +1,227 @@
 # AI Sales Automation Architecture
 
-This repository describes the backend architecture for an **AI sales automation platform**.
+This repository explains the architecture of an **AI sales automation platform**.
 
-The product connects to WhatsApp, Instagram, and Facebook, stores every conversation, creates and updates leads, lets Hermes understand what the customer wants, and prepares the next sales action.
+It is not a UI project. It explains:
 
-This is an architecture repository, not a UI design repository.
+- what parts we need,
+- what technology is used in each part,
+- how a message moves through the system,
+- where Hermes and OpenAI are used,
+- how we keep browser automation controlled,
+- and how we can replace unofficial connectors later.
 
 ---
 
-## 1. The product in one sentence
+## 1. Product idea
 
-> An AI sales operator that watches business conversations, creates leads, drafts replies, schedules follow-ups, and makes sure no sales opportunity is forgotten.
+> An AI sales operator that watches WhatsApp, Instagram, and Facebook conversations, creates and updates leads, drafts replies, schedules follow-ups, and makes sure no sales opportunity is forgotten.
+
+The first version starts with:
+
+- WhatsApp,
+- Instagram messages,
+- Facebook messages,
+- a NestJS modular monolith,
+- Hermes as the agent runtime,
+- OpenAI as the first model provider,
+- Browserbase for browser sessions,
+- Playwright for stable browser steps,
+- Stagehand when the page changes,
+- OpenWA as the first WhatsApp provider.
 
 ---
 
-## 2. The architecture in one picture
+# Architecture Views
 
-This is the main diagram. It only shows the important path.
+Instead of one huge diagram, the architecture is split into six views.
+
+Each view answers one question.
+
+---
+
+## View 1 — Who uses the system?
+
+This is the highest-level view.
 
 ```mermaid
 flowchart LR
     CUSTOMER["Customer"]
-    CHANNELS["WhatsApp, Instagram, Facebook"]
-    CONNECTORS["Channel Connectors"]
-    GATEWAY["Channel Gateway"]
-    CORE["NestJS Modular Monolith"]
-    HERMES["Hermes AI Runtime"]
-    APPROVAL["Policy and Human Approval"]
-    OUTBOX["Outbound Message Queue"]
-    DATA[("PostgreSQL, Redis, File Storage")]
+    CHANNELS["WhatsApp / Instagram / Facebook"]
+    PLATFORM["AI Sales Automation Platform"]
+    SALES["Sales Team"]
+    OWNER["Business Owner"]
 
     CUSTOMER -->|"sends message"| CHANNELS
-    CHANNELS -->|"read message"| CONNECTORS
-    CONNECTORS -->|"common message format"| GATEWAY
-    GATEWAY -->|"store and process"| CORE
-    CORE -->|"ask AI for next action"| HERMES
-    HERMES -->|"suggest action"| APPROVAL
-    APPROVAL -->|"approved internal changes"| CORE
-    APPROVAL -->|"approved customer reply"| OUTBOX
-    OUTBOX -->|"send through connector"| CONNECTORS
-    CONNECTORS -->|"reply"| CHANNELS
-    CHANNELS --> CUSTOMER
-
-    CORE --- DATA
-    GATEWAY --- DATA
-    HERMES --- DATA
+    CHANNELS -->|"conversation"| PLATFORM
+    PLATFORM -->|"leads, tasks, draft replies"| SALES
+    SALES -->|"approve or edit"| PLATFORM
+    PLATFORM -->|"reports and daily summary"| OWNER
+    PLATFORM -->|"approved reply"| CHANNELS
 ```
 
-### How to read it
+### What this means
 
-1. The customer sends a message on WhatsApp, Instagram, or Facebook.
-2. A connector reads the message.
-3. The Channel Gateway converts it into one common format.
-4. The NestJS application stores the conversation and updates the lead.
-5. Hermes receives only the context needed for the task.
-6. Hermes uses OpenAI models to classify, extract, reason, and draft.
-7. Safe internal actions may run automatically.
-8. Customer-facing actions require approval in the MVP.
-9. Approved replies go to the Outbox and return through the same connector.
+The platform sits between social inboxes and the sales team.
 
-The main rule is:
+It does four main jobs:
 
-> Connectors move messages. The core application owns the business data.
-
-If OpenWA, Browserbase, or a social session stops working, contacts, leads, tasks, approvals, reports, and old conversations remain safe in the core database.
+1. Capture conversations.
+2. Turn conversations into organized sales data.
+3. Let AI suggest the next action.
+4. Send only approved customer-facing actions.
 
 ---
 
-## 3. What is inside each block
-
-### A. Customer channels
-
-The MVP starts with:
-
-- WhatsApp.
-- Instagram messages.
-- Facebook messages.
-
-Instagram and Facebook are accessed through Meta Business Suite in a browser session.
-
----
-
-### B. Channel connectors
-
-The connector layer hides how each platform is accessed.
+## View 2 — What are the main runtime parts?
 
 ```mermaid
 flowchart LR
-    WA["WhatsApp"] --> WA_INTERFACE["WhatsAppProvider interface"]
-    WA_INTERFACE --> OPENWA["OpenWA primary"]
-    WA_INTERFACE -.-> WPPCONNECT["WPPConnect backup"]
-    WA_INTERFACE -.-> WWEBJS["whatsapp-web.js backup"]
+    CHANNELS["Social Channels"]
+    CONNECTORS["Channel Connectors"]
+    GATEWAY["Channel Gateway"]
+    CORE["NestJS Modular Monolith"]
+    AI["Hermes AI Runtime"]
+    APPROVAL["Policy + Human Approval"]
+    DATA[("PostgreSQL / Redis / Files")]
 
-    META["Instagram and Facebook"] --> META_WORKER["Meta Browser Worker"]
-    BROWSERBASE["Browserbase session"] --> META_WORKER
-    PLAYWRIGHT["Playwright fixed flows"] --> META_WORKER
-    STAGEHAND["Stagehand recovery"] -.-> META_WORKER
+    CHANNELS --> CONNECTORS
+    CONNECTORS --> GATEWAY
+    GATEWAY --> CORE
+    CORE --> AI
+    AI --> APPROVAL
+    APPROVAL --> CORE
+    CORE --> DATA
+    CORE -->|"outbound command"| GATEWAY
+    GATEWAY --> CONNECTORS
+    CONNECTORS --> CHANNELS
+```
+
+### Main rule
+
+> Connectors move messages. The core application owns the business data.
+
+If OpenWA, Browserbase, or a browser session stops working, contacts, leads, tasks, approvals, reports, and old conversations stay safe in PostgreSQL.
+
+---
+
+## View 3 — How do channel connectors work?
+
+```mermaid
+flowchart TB
+    subgraph WHATSAPP["WhatsApp Path"]
+        WA["WhatsApp Web"]
+        WA_INTERFACE["WhatsAppProvider Interface"]
+        OPENWA["OpenWA — Primary"]
+        WPPCONNECT["WPPConnect — Backup"]
+        WWEBJS["whatsapp-web.js — Backup"]
+
+        WA --> WA_INTERFACE
+        WA_INTERFACE --> OPENWA
+        WA_INTERFACE -.-> WPPCONNECT
+        WA_INTERFACE -.-> WWEBJS
+    end
+
+    subgraph META["Instagram + Facebook Path"]
+        META_INBOX["Meta Business Suite"]
+        BROWSERBASE["Browserbase Session"]
+        PLAYWRIGHT["Playwright — Normal Path"]
+        STAGEHAND["Stagehand — Recovery Path"]
+        META_WORKER["Meta Browser Worker"]
+
+        BROWSERBASE --> META_WORKER
+        PLAYWRIGHT --> META_WORKER
+        STAGEHAND -.-> META_WORKER
+        META_INBOX <--> META_WORKER
+    end
 
     OPENWA --> GATEWAY["Channel Gateway"]
-    WPPCONNECT --> GATEWAY
-    WWEBJS --> GATEWAY
+    WPPCONNECT -.-> GATEWAY
+    WWEBJS -.-> GATEWAY
     META_WORKER --> GATEWAY
 ```
 
-#### WhatsApp connector
+### WhatsApp
 
-**Primary:** OpenWA.
+The core does not call OpenWA directly.
 
-**Backups:** WPPConnect, then `whatsapp-web.js`.
-
-All providers implement the same application interface:
+It calls a provider interface:
 
 ```ts
 interface WhatsAppProvider {
   connect(accountId: string): Promise<void>;
-  disconnect(accountId: string): Promise<void>;
   sendMessage(input: SendMessageInput): Promise<SendMessageResult>;
   getHealth(accountId: string): Promise<ConnectorHealth>;
 }
 ```
 
-The core never imports OpenWA directly. It only knows `WhatsAppProvider`.
+Provider order for the MVP:
 
-This means we can replace the library later without rebuilding the CRM.
+1. OpenWA.
+2. WPPConnect.
+3. `whatsapp-web.js`.
+4. Manual open-in-WhatsApp fallback.
+5. Official API later when the product has enough revenue.
 
-#### Meta browser connector
+### Instagram and Facebook
 
-The Meta connector uses four parts:
+The Meta Browser Worker uses:
 
-| Part | Job |
+| Tool | Job |
 |---|---|
-| Browserbase | Hosts the browser session and keeps a separate login context for each company |
-| Playwright | Runs stable repeated steps such as opening the inbox, reading unread messages, typing, and sending |
-| Stagehand | Helps when selectors or page layouts change |
-| Meta Browser Worker | Owns the complete restricted workflow and sends normalized events to our backend |
+| Browserbase | Hosts the browser session and keeps one isolated login context per company |
+| Playwright | Runs stable steps such as opening the inbox, reading messages, typing, and sending |
+| Stagehand | Helps when selectors or page layout change |
+| Meta Browser Worker | Owns the restricted workflow and sends normalized events to the backend |
 
 The rule is:
 
-> Playwright first. Stagehand only when the fixed flow cannot understand the current page.
+> Playwright first. Stagehand only when the fixed flow fails.
 
-Stagehand does not make sales decisions. It only helps the browser worker complete a browser task.
+Stagehand helps with browser interaction. It does not decide prices, discounts, lead stages, or sales strategy.
 
 ---
 
-### C. Channel Gateway
+## View 4 — What happens when a message arrives?
 
-The Channel Gateway is the border between external platforms and our product.
+```mermaid
+sequenceDiagram
+    participant C as Customer
+    participant CH as WhatsApp or Meta Inbox
+    participant CO as Connector
+    participant G as Channel Gateway
+    participant Q as BullMQ
+    participant APP as NestJS Core
+    participant DB as PostgreSQL
+    participant H as Hermes
+    participant M as OpenAI
 
-Its job is to:
+    C->>CH: Send message
+    CH->>CO: Message appears
+    CO->>G: Raw channel event
+    G->>G: Normalize and deduplicate
+    G->>Q: Queue processing job
+    Q->>APP: Process message
+    APP->>DB: Save contact, conversation, message, lead
+    APP->>H: Request AI task with limited context
+    H->>M: Run classification or extraction
+    M-->>H: Structured result
+    H-->>APP: Proposed actions and draft
+    APP->>DB: Save result, tasks, and approval request
+```
 
-- Receive events from every connector.
-- Verify the tenant and connected account.
-- Convert every message into one common shape.
-- Detect duplicate events.
-- Store an idempotency key.
-- Put background work into BullMQ.
-- Route outbound messages to the correct provider.
+### Inbound steps
 
-Example normalized message:
+1. A connector reads the new message.
+2. The Channel Gateway converts it into one common format.
+3. The gateway creates an idempotency key so the same message is not processed twice.
+4. BullMQ runs the processing job.
+5. The core saves the conversation.
+6. Hermes receives only the context needed for the current task.
+7. The AI result is validated before anything changes.
+8. The core creates or updates leads, tasks, and approval requests.
+
+### Common message shape
 
 ```ts
 type NormalizedMessage = {
@@ -176,227 +240,68 @@ type NormalizedMessage = {
 };
 ```
 
-After normalization, the rest of the application does not need to know whether a message came from OpenWA or a browser.
+After this point, the CRM does not care whether the message came from OpenWA or from a browser.
 
 ---
 
-### D. NestJS modular monolith
-
-The first version is one deployable backend application with clear internal modules.
-
-```mermaid
-flowchart TB
-    API["NestJS Application"]
-
-    API --> AUTH["Auth, Tenant, RBAC"]
-    API --> CONTACTS["Contacts"]
-    API --> CONVERSATIONS["Conversations"]
-    API --> LEADS["Leads and Pipeline"]
-    API --> TASKS["Tasks and Follow-ups"]
-    API --> KNOWLEDGE["Company Knowledge"]
-    API --> APPROVALS["Approval Queue"]
-    API --> OUTBOX["Message Outbox"]
-    API --> REPORTS["Reports and Daily Briefs"]
-```
-
-#### Modules
-
-| Module | Owns |
-|---|---|
-| Auth and Tenant | Companies, users, roles, permissions, connected accounts |
-| Contacts | Customer identity, phone numbers, handles, channel profiles |
-| Conversations | Threads, messages, attachments, unread state, assignments |
-| Leads and Pipeline | Lead stage, score, value, owner, lost reason |
-| Tasks and Follow-ups | Reminders, scheduled actions, overdue work |
-| Company Knowledge | Services, FAQs, rules, approved prices, tone, working hours |
-| Approval Queue | AI actions waiting for approve, edit, or reject |
-| Message Outbox | Reliable outbound sends, retries, and delivery state |
-| Reports | Sales activity, missed leads, response time, daily business brief |
-
-#### Why monolith first
-
-- Faster to build.
-- Easier database transactions.
-- Easier to change the sales workflow during validation.
-- Fewer deployments and fewer network failures.
-- Modules can still be separated later.
-
-OpenWA workers, browser workers, and Hermes run as separate processes because they have different failure and scaling behavior.
-
----
-
-## 4. Inbound message flow
-
-This diagram shows only what happens when a customer sends a message.
-
-```mermaid
-sequenceDiagram
-    participant C as Customer
-    participant CH as WhatsApp or Meta Inbox
-    participant CO as Channel Connector
-    participant G as Channel Gateway
-    participant Q as BullMQ
-    participant APP as NestJS Core
-    participant DB as PostgreSQL
-    participant H as Hermes
-    participant M as OpenAI Model
-
-    C->>CH: Send message
-    CH->>CO: New message appears
-    CO->>G: Raw platform event
-    G->>G: Normalize and deduplicate
-    G->>Q: Queue inbound-message job
-    Q->>APP: Process message
-    APP->>DB: Save contact, conversation, message, lead
-    APP->>H: Ask for classification and next action
-    H->>M: Run structured AI task
-    M-->>H: Intent, fields, priority, draft
-    H-->>APP: Proposed actions
-    APP->>DB: Save AI result and approval request
-```
-
-### Example
-
-Customer message:
-
-> I have a 180 m² apartment in New Cairo and need finishing in three months.
-
-The AI result may be:
-
-```json
-{
-  "intent": "request_quote",
-  "service": "full_finishing",
-  "location": "New Cairo",
-  "areaM2": 180,
-  "timeline": "3 months",
-  "priority": "high",
-  "missingFields": ["budget", "finishing_level"],
-  "nextAction": "ask_qualification_questions"
-}
-```
-
-The application then:
-
-- Creates or updates the contact.
-- Creates a lead.
-- Saves the extracted fields.
-- Adds the lead to the correct pipeline stage.
-- Creates a draft reply.
-- Requests approval when the reply will be sent to the customer.
-
----
-
-## 5. Outbound reply flow
-
-This diagram shows only how an approved reply is sent.
-
-```mermaid
-sequenceDiagram
-    participant H as Hermes
-    participant APP as NestJS Core
-    participant E as Sales Employee
-    participant O as Outbox
-    participant Q as BullMQ
-    participant G as Channel Gateway
-    participant CO as Channel Connector
-    participant C as Customer
-
-    H->>APP: Propose reply and action
-    APP->>E: Show approval request
-    E->>APP: Approve, edit, or reject
-
-    alt Approved or edited
-        APP->>O: Create outbound message
-        O->>Q: Queue send job
-        Q->>G: Send normalized command
-        G->>CO: Use correct channel provider
-        CO->>C: Send reply
-        CO-->>G: Sent or failed status
-        G-->>APP: Update delivery result
-    else Rejected
-        APP->>APP: Save rejection and audit reason
-    end
-```
-
-The connector never chooses what to say. It only sends an already approved command.
-
----
-
-## 6. Hermes and OpenAI
-
-Hermes and OpenAI have different jobs.
+## View 5 — How does AI approval work?
 
 ```mermaid
 flowchart LR
-    EVENT["Message or scheduled job"] --> CONTEXT["Context Builder"]
-    CONTEXT --> HERMES["Hermes Agent Runtime"]
-    HERMES --> ROUTER["Model Router"]
-    ROUTER --> FAST["Low-cost OpenAI model"]
-    ROUTER --> SMART["Reasoning OpenAI model"]
-    FAST --> VALIDATE["Structured Output Validation"]
-    SMART --> VALIDATE
-    VALIDATE --> POLICY["Action Policy"]
-    POLICY -->|"safe internal action"| TOOLS["Restricted Backend Tools"]
-    POLICY -->|"customer-facing action"| HUMAN["Human Approval"]
-    POLICY -->|"not allowed"| AUDIT["Audit Log"]
+    EVENT["Message or Scheduled Job"]
+    CONTEXT["Context Builder"]
+    HERMES["Hermes Agent Runtime"]
+    MODEL["OpenAI Model Adapter"]
+    VALIDATE["Structured Output Validation"]
+    POLICY["Action Policy"]
+    SAFE["Safe Internal Action"]
+    HUMAN["Human Approval"]
+    BLOCK["Block + Audit"]
+    TOOLS["Restricted Backend Tools"]
+
+    EVENT --> CONTEXT
+    CONTEXT --> HERMES
+    HERMES --> MODEL
+    MODEL --> VALIDATE
+    VALIDATE --> POLICY
+
+    POLICY -->|"low risk"| SAFE
+    POLICY -->|"customer-facing or risky"| HUMAN
+    POLICY -->|"not allowed"| BLOCK
+
+    SAFE --> TOOLS
+    HUMAN -->|"approved or edited"| TOOLS
 ```
 
-### Hermes
+### Hermes and OpenAI are not the same thing
 
-Hermes runs the automation workflow.
+| Part | Job |
+|---|---|
+| Hermes | Runs the agent workflow, selects tools, keeps task state, and returns proposed actions |
+| OpenAI | Provides the language models used for classification, extraction, reasoning, and drafting |
+| Context Builder | Selects only the relevant company data and conversation history |
+| Validator | Checks that the model output matches the expected schema |
+| Policy Engine | Decides whether an action is automatic, needs approval, or is blocked |
+| Restricted Tool Gateway | Executes only backend commands that we explicitly allow |
 
-It can:
-
-- Classify messages.
-- Extract lead data.
-- Draft replies.
-- Plan follow-ups.
-- Summarize conversations.
-- Detect forgotten leads.
-- Generate daily briefs.
-- Call restricted backend tools.
-
-Hermes cannot directly access:
-
-- Browser cookies.
-- Customer passwords.
-- Raw database credentials.
-- Arbitrary websites.
-- Shell commands.
-- Another tenant's data.
-
-### OpenAI
-
-OpenAI provides language models used by Hermes.
-
-We use a provider adapter so the core is not tied to one model name:
-
-```ts
-interface AIModelProvider {
-  runStructuredTask<T>(input: ModelTaskInput): Promise<T>;
-}
-```
-
-The model router chooses:
-
-- A cheaper model for simple classification and extraction.
-- A stronger model for unclear or high-value conversations.
-
----
-
-## 7. AI action safety
-
-Every AI action has a risk level.
+### Risk levels
 
 | Risk | Examples | MVP policy |
 |---|---|---|
-| Low | Tag message, classify lead, summarize, create internal task | Automatic with audit |
-| Medium | Change stage, assign employee, schedule follow-up | Automatic only with strong validation or approval |
-| High | Send reply, offer appointment, send quotation | Human approval |
+| Low | Classify, tag, summarize, create internal task | Automatic with audit |
+| Medium | Move lead stage, assign employee, schedule follow-up | Validation or approval |
+| High | Send customer reply, appointment, quotation | Human approval |
 | Critical | Discount, refund, cancellation, legal complaint | Human-only |
 
-The AI works through a restricted tool gateway:
+Hermes does not receive:
+
+- browser cookies,
+- customer passwords,
+- database credentials,
+- unrestricted browser control,
+- another tenant's data.
+
+It works through restricted tools such as:
 
 ```ts
 createLead();
@@ -407,239 +312,210 @@ requestReplyApproval();
 queueApprovedReply();
 ```
 
-Every tool call is checked by the backend for:
-
-- Tenant ID.
-- User or automation identity.
-- Allowed action.
-- Valid arguments.
-- Current lead and conversation state.
-- Required approval.
-
 ---
 
-## 8. Data ownership
-
-### PostgreSQL
-
-PostgreSQL is the source of truth for:
-
-- Tenants.
-- Users and roles.
-- Connected channel accounts.
-- Contacts.
-- Conversations and messages.
-- Leads and stages.
-- Tasks and follow-ups.
-- Approvals.
-- Outbox messages.
-- AI runs and audit logs.
-
-### Redis and BullMQ
-
-Redis and BullMQ handle:
-
-- Inbound message jobs.
-- AI jobs.
-- Outbound send jobs.
-- Retries.
-- Delayed follow-ups.
-- Connector health checks.
-- Idempotency locks.
-
-Redis is not the source of truth. Important state remains in PostgreSQL.
-
-### MinIO or S3-compatible storage
-
-Used for:
-
-- Images.
-- Voice notes.
-- Videos.
-- Documents.
-- Optional browser debug screenshots.
-
-Only metadata and secure object references are stored in PostgreSQL.
-
----
-
-## 9. Tenant isolation
-
-Every important record contains a `tenantId`.
-
-Each company has separate:
-
-- Users and permissions.
-- WhatsApp sessions.
-- Browserbase contexts.
-- Channel accounts.
-- Company knowledge.
-- Conversations and leads.
-- AI context.
-- Usage and cost records.
-
-A browser worker receives only one tenant and one connected account for each job.
-
-Hermes receives a prepared context from the backend. It does not search the complete database by itself.
-
----
-
-## 10. Runtime and deployment
-
-The MVP uses Docker Compose.
+## View 6 — How is the MVP deployed?
 
 ```mermaid
 flowchart LR
-    WEB["Operations application later"] --> API["NestJS API"]
+    USERS["Sales Team / Owner"]
 
-    API --> POSTGRES[("PostgreSQL")]
-    API --> REDIS[("Redis")]
-    API --> STORAGE[("MinIO")]
+    subgraph PILOT["Pilot Server — Docker Compose"]
+        API["NestJS API"]
+        JOBS["BullMQ Workers"]
+        HERMES["Hermes Runtime"]
+        WA_WORKER["WhatsApp Connector"]
+        META_WORKER["Meta Browser Worker"]
+        POSTGRES[("PostgreSQL")]
+        REDIS[("Redis")]
+        STORAGE[("MinIO")]
+    end
 
-    REDIS --> CORE_WORKER["Core Job Worker"]
-    REDIS --> HERMES_WORKER["Hermes Worker"]
-    REDIS --> WA_WORKER["WhatsApp Worker"]
-    REDIS --> META_WORKER["Meta Browser Worker"]
+    BROWSERBASE["Browserbase Cloud"]
+    OPENAI["OpenAI Models"]
+    WA["WhatsApp Web"]
+    META["Meta Business Suite"]
 
-    WA_WORKER --> OPENWA["OpenWA"]
-    META_WORKER --> BROWSERBASE["Browserbase"]
-    META_WORKER --> PLAYWRIGHT["Playwright"]
-    META_WORKER -.-> STAGEHAND["Stagehand"]
+    USERS --> API
+    API --> POSTGRES
+    API --> REDIS
+    API --> STORAGE
+    JOBS --> REDIS
+    JOBS --> HERMES
+    HERMES --> OPENAI
+    WA_WORKER <--> WA
+    META_WORKER <--> BROWSERBASE
+    BROWSERBASE <--> META
 ```
 
-### Processes
+### Why Docker Compose first?
 
-1. **NestJS API** — business API and modular monolith.
-2. **Core Job Worker** — inbound processing, reports, scheduled tasks.
-3. **Hermes Worker** — AI automation runs.
-4. **WhatsApp Worker** — OpenWA sessions and WhatsApp commands.
-5. **Meta Browser Worker** — Browserbase, Playwright, and Stagehand tasks.
-6. **PostgreSQL** — durable business data.
-7. **Redis** — queues, locks, and temporary cache.
-8. **MinIO** — local attachment storage.
+The first pilot does not need Kubernetes.
 
-We are not using Kubernetes or microservices in the MVP.
+Docker Compose is enough for:
 
----
+- one NestJS API,
+- background workers,
+- PostgreSQL,
+- Redis,
+- MinIO,
+- Hermes,
+- WhatsApp connector processes,
+- Meta browser workers.
 
-## 11. Technology map
-
-| Area | Technology | Where it is used | Why |
-|---|---|---|---|
-| Backend | NestJS with Fastify | Main application | Clear modules, dependency injection, workers, WebSockets |
-| Language | TypeScript | Core and connectors | Shared contracts and safer refactoring |
-| Database | PostgreSQL | Business source of truth | Transactions and relational data |
-| ORM | Prisma | Core data access | Schema, migrations, TypeScript types |
-| Queue | BullMQ | Background processing | Retries, schedules, delayed jobs |
-| Queue storage | Redis | Workers and locks | Fast temporary coordination |
-| WhatsApp | OpenWA | WhatsApp worker | Fast MVP without official API cost |
-| WhatsApp backup | WPPConnect | Provider fallback | Reduces dependency on one library |
-| WhatsApp backup 2 | whatsapp-web.js | Provider fallback | Third implementation option |
-| Browser hosting | Browserbase | Meta browser sessions | Managed sessions, contexts, debugging |
-| Browser automation | Playwright | Meta browser worker | Stable and testable repeated actions |
-| Browser recovery | Stagehand | Meta browser worker | Semantic recovery when the page changes |
-| Agent runtime | Hermes | AI worker | Agent workflow, tools, memory, reasoning |
-| Model provider | OpenAI | Called through Hermes | Classification, extraction, drafting, reasoning |
-| File storage | MinIO then S3-compatible | Attachments | Portable object storage |
-| Local deployment | Docker Compose | Development and pilots | Simple and repeatable |
-| Observability | Structured logs and OpenTelemetry-compatible tracing | All processes | Debug connector and AI failures |
+The browser and WhatsApp workers stay in separate processes because they can crash, consume more memory, or require re-login without taking down the core application.
 
 ---
 
-## 12. Connector fallback strategy
+# Core Application Modules
 
-```text
-WhatsApp:
-OpenWA
-  -> WPPConnect
-  -> whatsapp-web.js
-  -> manual open-in-WhatsApp fallback
-  -> official adapter later
+The backend is one **NestJS modular monolith**.
 
-Instagram and Facebook:
-Playwright fixed flow
-  -> Stagehand recovery
-  -> human login or intervention
-  -> manual open-in-Meta fallback
-  -> official Meta adapter later
-```
+| Module | Owns |
+|---|---|
+| Auth and Tenant | Companies, users, roles, permissions, connected accounts |
+| Contacts | Customer identity, phone numbers, handles, and channel profiles |
+| Conversations | Threads, messages, attachments, unread state, and assignment |
+| Leads and Pipeline | Stage, score, expected value, owner, and lost reason |
+| Tasks and Follow-ups | Reminders, scheduled actions, and overdue work |
+| Company Knowledge | Services, FAQs, rules, approved prices, tone, and working hours |
+| Approval Queue | AI actions waiting for approve, edit, or reject |
+| Message Outbox | Reliable sending, retries, and delivery state |
+| Reports | Activity, missed leads, response time, and daily business brief |
 
-Using several unofficial WhatsApp libraries protects us from one library-specific failure. It does not remove all risk caused by changes in WhatsApp Web itself.
+### Why a modular monolith?
+
+- Faster to build.
+- Easier database transactions.
+- Easier to change during customer validation.
+- Fewer deployments.
+- Clear modules can still become services later.
 
 ---
 
-## 13. MVP scope
+# Technology Map
 
-The first usable version includes:
+| Area | Technology | Why we use it |
+|---|---|---|
+| Backend | NestJS with Fastify | Clear modules, dependency injection, workers, and WebSockets |
+| Language | TypeScript | Shared types across API, workers, and connectors |
+| Database | PostgreSQL | Main relational source of truth |
+| ORM | Prisma | Schema, migrations, and TypeScript types |
+| Queue and cache | Redis + BullMQ | Jobs, retries, locks, and delayed follow-ups |
+| WhatsApp primary | OpenWA | Fast MVP without paying for the official API |
+| WhatsApp backups | WPPConnect, `whatsapp-web.js` | Avoid depending on one library only |
+| Browser hosting | Browserbase | Managed sessions, isolated contexts, and debugging |
+| Browser automation | Playwright | Stable and testable repeated steps |
+| Browser recovery | Stagehand | Helps when page layout or selectors change |
+| Agent runtime | Hermes | Runs the AI workflow and controlled tool calls |
+| Model provider | OpenAI first | Classification, extraction, reasoning, and reply drafting |
+| File storage | MinIO locally | Easy S3-compatible attachment storage |
+| Local deployment | Docker Compose | Simple pilot infrastructure |
+
+---
+
+# Reliability Rules
+
+## Connector failure must not break the CRM
+
+A connector can be:
+
+- connected,
+- degraded,
+- login required,
+- blocked by challenge,
+- disconnected.
+
+When a connector fails:
+
+- business data stays available,
+- unsent replies stay in the Outbox,
+- retries stop safely,
+- the employee gets an alert,
+- the employee can open the original inbox manually.
+
+## Multi-tenant isolation
+
+Every record includes a `tenantId`.
+
+Each company has:
+
+- separate connected accounts,
+- separate browser context,
+- separate company knowledge,
+- separate permissions,
+- separate AI task context,
+- separate audit records.
+
+The model never chooses the tenant. The backend resolves and validates the tenant before the AI task starts.
+
+---
+
+# Architecture as Code
+
+The architecture source of truth is here:
+
+- [`architecture/workspace.dsl`](architecture/workspace.dsl) — Structurizr C4 model.
+- [`architecture/d2/`](architecture/d2/) — editable D2 presentation views.
+- [`decisions/`](decisions/) — Architecture Decision Records.
+- [`docs/`](docs/) — detailed architecture notes.
+
+Structurizr stores the architecture model. The smaller GitHub diagrams in this README make the architecture easy to review without opening another tool.
+
+---
+
+# MVP Scope
+
+## Included
 
 - WhatsApp connection through OpenWA.
+- WPPConnect technical fallback test.
 - Instagram and Facebook through Meta Business Suite browser automation.
-- Unified normalized conversation storage.
-- Contacts and lead pipeline.
-- AI classification and lead extraction.
-- AI reply drafting.
-- Human approval before customer replies.
-- Tasks and follow-ups.
-- Outbound message queue with retries.
-- Daily sales summary.
-- Audit log for AI and outbound actions.
-- Connector health status.
-- Manual fallback links.
+- Browserbase session per tenant.
+- Playwright stable flows.
+- Stagehand recovery experiment.
+- Unified normalized messages.
+- Contacts, conversations, leads, pipeline, and tasks.
+- Hermes classification, extraction, drafting, and follow-up planning.
+- Human approval for customer-facing replies.
+- Outbox, retries, audit logs, and health monitoring.
+- Daily AI sales summary.
 
-Not included in the first version:
+## Not included yet
 
-- Kubernetes.
 - Microservices.
-- Fully autonomous sales replies.
-- Bulk outreach.
-- Every social network.
-- Automatic discounts, refunds, or cancellations.
-- Official platform APIs unless required for a pilot.
+- Kubernetes.
+- Full autonomous replies.
+- Bulk cold outreach.
+- TikTok.
+- Official messaging APIs.
+- Complex billing.
+- Marketplace integrations.
 
 ---
 
-## 14. Build order
+# First Technical Spikes
 
-1. Create NestJS project with tenant, contact, conversation, and lead modules.
-2. Add PostgreSQL and Prisma.
-3. Add Redis and BullMQ.
-4. Define `NormalizedMessage` and connector interfaces.
-5. Build OpenWA spike: receive and send one message.
-6. Add idempotency and message persistence.
-7. Build Browserbase login and context spike.
-8. Read Meta unread conversations with Playwright.
-9. Add Stagehand fallback for one changed page state.
-10. Connect Hermes to one restricted task.
-11. Use OpenAI structured output to extract lead data.
-12. Build approval and outbound message flow.
-13. Add connector health and manual fallback.
-14. Run an end-to-end pilot with one company.
+1. Receive one WhatsApp message through OpenWA.
+2. Convert it into `NormalizedMessage`.
+3. Save it safely with idempotency.
+4. Send one WhatsApp reply through the Outbox.
+5. Open Meta Business Suite through Browserbase.
+6. Read one Instagram or Facebook conversation using Playwright.
+7. Test Stagehand after intentionally breaking a selector.
+8. Send a message to Hermes with limited context.
+9. Return structured lead data.
+10. Create an approval request.
+11. Send the approved reply through the correct connector.
+12. Test connector failure and manual fallback.
 
 ---
 
-## 15. Detailed documents
+# Review Workflow
 
-- [`00 - Scope and principles`](docs/00-scope-and-principles.md)
-- [`01 - System context`](docs/01-system-context.md)
-- [`02 - Container architecture`](docs/02-container-architecture.md)
-- [`03 - Message lifecycle`](docs/03-message-lifecycle.md)
-- [`04 - Hermes AI automation runtime`](docs/04-ai-automation-runtime.md)
-- [`05 - Selected technology map`](docs/05-selected-technology-map.md)
+Architecture changes happen through a branch and Pull Request.
 
-Architecture decisions:
-
-- [`ADR-001 - Launch channels`](decisions/ADR-001-launch-channels.md)
-- [`ADR-002 - Modular monolith`](decisions/ADR-002-modular-monolith.md)
-- [`ADR-003 - Hermes runtime`](decisions/ADR-003-hermes-agent-runtime.md)
-- [`ADR-004 - Browserbase runtime`](decisions/ADR-004-browserbase-runtime.md)
-- [`ADR-005 - WhatsApp connectors`](decisions/ADR-005-whatsapp-connectors.md)
-
----
-
-## 16. Collaboration workflow
-
-1. Architecture changes are made on a branch.
-2. Every meaningful change is reviewed in a Pull Request.
-3. Important technology choices are recorded as ADRs.
-4. Mermaid diagrams stay editable as text.
-5. A decision is merged only after review.
+1. Change the Structurizr model or a D2 view.
+2. Update the related ADR when a decision changes.
+3. Review the diagram and text in the Pull Request.
+4. Merge only after the architecture is accepted.
